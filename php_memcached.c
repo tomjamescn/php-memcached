@@ -630,7 +630,7 @@ uint64_t s_zval_to_uint64 (zval *cas)
 /****************************************
   Iterate over memcached results and mget
 ****************************************/
-
+// tangwei: get方法的底层 后的结果，对标志位的处理，压缩，反序列化都在合理处理
 static
 memcached_return php_memc_result_apply(php_memc_object_t *intern, php_memc_result_apply_fn result_apply_fn, zend_bool fetch_delay, void *context)
 {
@@ -679,6 +679,7 @@ memcached_return php_memc_result_apply(php_memc_object_t *intern, php_memc_resul
 			s_uint64_to_zval(&zcas, cas);
 
 			key = zend_string_init (res_key, res_key_len, 0);
+            //tangwei:这一句很关键
 			retval = result_apply_fn(intern, key, &val, &zcas, flags, context);
 
 			zend_string_release(key);
@@ -700,6 +701,8 @@ memcached_return php_memc_result_apply(php_memc_object_t *intern, php_memc_resul
 	return status;
 }
 
+
+// tangwei:get的底层实现
 static
 zend_bool php_memc_mget_apply(php_memc_object_t *intern, zend_string *server_key, php_memc_keys_t *keys,
 						php_memc_result_apply_fn result_apply_fn, zend_bool with_cas, void *context)
@@ -727,6 +730,7 @@ zend_bool php_memc_mget_apply(php_memc_object_t *intern, zend_string *server_key
 	if (server_key) {
 		status = memcached_mget_by_key(intern->memc, ZSTR_VAL(server_key), ZSTR_LEN(server_key), keys->mkeys, keys->mkeys_len, keys->num_valid_keys);
 	} else {
+        // tangwei: get方法走这里
 		status = memcached_mget(intern->memc, keys->mkeys, keys->mkeys_len, keys->num_valid_keys);
 	}
 
@@ -858,7 +862,7 @@ zend_bool s_invoke_cache_callback(zval *zobject, zend_fcall_info *fci, zend_fcal
 /****************************************
   Wrapper for setting from zval
 ****************************************/
-
+//tangwei:压缩逻辑
 static
 zend_bool s_compress_value (php_memc_compression_type compression_type, zend_string **payload_in, uint32_t *flags)
 {
@@ -912,7 +916,9 @@ zend_bool s_compress_value (php_memc_compression_type compression_type, zend_str
 
 	/* Replace the payload with the compressed copy */
 	if (compress_status) {
+        // tangei: 设置flag
 		MEMC_VAL_SET_FLAG(*flags, MEMC_VAL_COMPRESSED | compression_type_flag);
+        // tangwei: 这里就是头部4字节的源代码
 		payload = zend_string_realloc(payload, compressed_size + sizeof(uint32_t), 0);
 
 		/* Copy the uin32_t at the beginning */
@@ -931,6 +937,7 @@ zend_bool s_compress_value (php_memc_compression_type compression_type, zend_str
 	return 0;
 }
 
+// tangwei: 序列化数据并且设置标记位
 static
 zend_bool s_serialize_value (php_memc_serializer_type serializer, zval *value, smart_str *buf, uint32_t *flags)
 {
@@ -1009,6 +1016,7 @@ zend_bool s_serialize_value (php_memc_serializer_type serializer, zval *value, s
 	return 1;
 }
 
+// tangwei: zval 转化为 playload
 static
 zend_string *s_zval_to_payload(php_memc_object_t *intern, zval *value, uint32_t *flags)
 {
@@ -1061,6 +1069,7 @@ zend_string *s_zval_to_payload(php_memc_object_t *intern, zval *value, uint32_t 
 		{
 			smart_str buffer = {0};
 
+            // 序列化数据，这里也会设置flag
 			if (!s_serialize_value (memc_user_data->serializer, value, &buffer, flags)) {
 				smart_str_free(&buffer);
 				return NULL;
@@ -1083,6 +1092,7 @@ zend_string *s_zval_to_payload(php_memc_object_t *intern, zval *value, uint32_t 
 		 *
 		 * No need to check the return value because the payload is always valid.
 		 */
+        // 压缩数据，这里也会设置flag
 		(void)s_compress_value (memc_user_data->compression_type, &payload, flags);
 	}
 
@@ -1103,6 +1113,7 @@ zend_bool s_should_retry_write (php_memc_object_t *intern, memcached_return stat
 	return s_memcached_return_is_error (status, 1);
 }
 
+//TODO:set方法调用
 static
 zend_bool s_memc_write_zval (php_memc_object_t *intern, php_memc_write_op op, zend_string *server_key, zend_string *key, zval *value, time_t expiration)
 {
@@ -1270,6 +1281,7 @@ static PHP_METHOD(Memcached, __construct)
 	memc_user_data->compression_enabled = 1;
 	memc_user_data->encoding_enabled  = 0;
 	memc_user_data->store_retry_count = MEMC_G(store_retry_count);
+    // 重要：这里实际上将set_udf_flags设置为1111111111111的二进制形式
 	memc_user_data->set_udf_flags     = -1;
 	memc_user_data->is_persistent     = is_persistent;
 
@@ -1413,6 +1425,7 @@ typedef struct {
 	zval *return_value;
 } php_memc_get_ctx_t;
 
+// tangwei get方法底层使用
 static
 zend_bool s_get_apply_fn(php_memc_object_t *intern, zend_string *key, zval *value, zval *cas, uint32_t flags, void *in_context)
 {
@@ -1433,6 +1446,7 @@ zend_bool s_get_apply_fn(php_memc_object_t *intern, zend_string *key, zval *valu
 	return 0; /* Stop after one */
 }
 
+// tangwei: get方法
 static
 void php_memc_get_impl(INTERNAL_FUNCTION_PARAMETERS, zend_bool by_key)
 {
@@ -1457,6 +1471,7 @@ void php_memc_get_impl(INTERNAL_FUNCTION_PARAMETERS, zend_bool by_key)
 		        Z_PARAM_LONG(get_flags)
 		ZEND_PARSE_PARAMETERS_END();
 	} else {
+        // tangwei: get方法走这里
 		/* "S|f!l" */
 		ZEND_PARSE_PARAMETERS_START(1, 3)
 		        Z_PARAM_STR(key)
@@ -3566,6 +3581,7 @@ memcached_return s_server_cursor_version_cb(const memcached_st *ptr, php_memcach
 }
 
 
+// tangwei: get方法 解压的函数
 static
 zend_string *s_decompress_value (const char *payload, size_t payload_len, uint32_t flags)
 {
@@ -3580,6 +3596,7 @@ zend_string *s_decompress_value (const char *payload, size_t payload_len, uint32
 		return NULL;
 	}
 
+    // tangwei: 重点 get 判断flag
 	is_fastlz = MEMC_VAL_HAS_FLAG(flags, MEMC_VAL_COMPRESSION_FASTLZ);
 	is_zlib   = MEMC_VAL_HAS_FLAG(flags, MEMC_VAL_COMPRESSION_ZLIB);
 
@@ -3605,6 +3622,7 @@ zend_string *s_decompress_value (const char *payload, size_t payload_len, uint32
 	ZSTR_VAL(buffer)[stored_length] = '\0';
 
 	if (!decompress_status) {
+        // tangwei: 报错的地方
 		php_error_docref(NULL, E_WARNING, "could not decompress value");
 		zend_string_release (buffer);
 		return NULL;
